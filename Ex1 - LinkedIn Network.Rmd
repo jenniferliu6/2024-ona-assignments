@@ -2,8 +2,11 @@
 title: "Ex1 - LinkedIn Network"
 author: "Jennifer Liu"
 date: "2024-03-18"
-output: pdf_document
+output:
+  html_document:
+    df_print: paged
 ---
+
 ```{r}
 # Setup chunk for RMarkdown
 knitr::opts_chunk$set(echo = TRUE)
@@ -27,6 +30,7 @@ print(number_of_connections)
 print(total_num)
 
 ```
+
 ```{r}
 library(ggraph)
 
@@ -87,4 +91,3 @@ ggraph(network, layout = 'fr') +
   geom_node_text(aes(label = label), repel = TRUE) +
   theme_graph()
 ```
-
