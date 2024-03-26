@@ -60,13 +60,13 @@ print(centrality_measures)
 # Plot the network graph
 plot(graph, vertex.size=degree_centrality, layout=layout_with_kk(graph))
 ```
-##Possible Consequences of Seat Choice
+## Possible Consequences of Seat Choice
 
 
 Based on the centrality measures calculated from the Fakebook bus seating arrangement, we can conclude:
 
 
-###When would this choice be beneficial?
+### When would this choice be beneficial?
 
 - **Enhanced Networking Opportunities**: A seat with high degree centrality, like Seat B, would provide numerous direct connections. This setup is advantageous for fostering a wide network, allowing for easy communication with many colleagues during the commute. It’s particularly beneficial for someone looking to establish a broad range of contacts quickly within the company.
 
@@ -74,7 +74,7 @@ Based on the centrality measures calculated from the Fakebook bus seating arrang
 
 - **Strategic Influence**: A seat with high betweenness centrality positions you as a key connector between different groups. This can be beneficial for exerting influence and playing a crucial role in the dissemination of information, making it an ideal choice for individuals looking to establish themselves as integral members of the company’s social and communication networks.
 
-##When would it be not so beneficial?
+## When would it be not so beneficial?
 
 - **Risk of Overexposure**: Being in a seat with high degree and closeness centralities means being more visible and accessible, which can lead to constant engagement with colleagues. This might be less beneficial for individuals who value privacy, quiet, or focused time during their commute.
 
