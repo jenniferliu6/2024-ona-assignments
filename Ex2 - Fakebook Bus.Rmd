@@ -1,0 +1,63 @@
+---
+title: "Ex2 - Fakebook bus"
+author: "Jennifer Liu"
+date: "2024-03-26"
+output: html_document
+---
+In this step we load all libraries used in this exercise.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Import libraries
+library(igraph)
+```
+First of all, I created the dataset called 'Fakebook Bus.csv' and attached it. The 'Fakebook Bus.csv' file contains the adjacency of the seats as indicated in the picture.
+
+
+```{r}
+seat_adjacency = read.csv("C:\\Users\\Admin\\Downloads\\Fakebook Bus.csv")
+head(seat_adjacency)
+```
+
+
+```{r}
+graph = graph_from_data_frame(seat_adjacency, directed = FALSE)
+
+plot(graph)
+```
+
+
+```{r}
+# Calculate centrality measures for the relevant seats
+degree_centrality = degree(graph, v=c("A","B","C","D"))
+
+closeness_centrality = closeness(graph, v=c("A","B","C","D"))
+
+betweenness_centrality = betweenness(graph, v=c("A","B","C","D"))
+```
+
+```{r}
+degree_centrality
+```
+```{r}
+closeness_centrality
+```
+```{r}
+betweenness_centrality
+```
+```{r}
+# Combine and display the centrality measures
+centrality_measures = data.frame(
+  Seat = c("A","B","C","D"),
+  Degree = degree_centrality,
+  Closeness = closeness_centrality,
+  Betweenness = betweenness_centrality
+)
+
+# Print the centrality measures
+print(centrality_measures)
+```
+```{r}
+# Plot the network graph
+plot(graph, vertex.size=degree_centrality, layout=layout_with_kk(graph))
+```
+
