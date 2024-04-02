@@ -8,6 +8,7 @@ output: html_document
 ## Part 1: Load data
 
 Load the following data: + applications from `app_data_sample.parquet` + edges from `edges_sample.csv`
+
 ```{r}
 library(arrow)
 library(dplyr)
@@ -30,6 +31,7 @@ examiner_names <- applications %>% distinct(examiner_name_first)
 
 head(examiner_names)
 ```
+
 ## Get gender for examiners
 
 We'll get gender based on the first name of the examiner, which is recorded in the field `examiner_name_first`. We'll use library `gender` for that, relying on a modified version of their own [example](https://cran.r-project.org/web/packages/gender/vignettes/predicting-gender.html).
@@ -50,6 +52,7 @@ examiner_names_gender <- examiner_names %>% do(results = gender(.$examiner_name_
 
 head(examiner_names_gender)
 ```
+
 Finally, let's join that table back to our original applications data and discard the temporary tables we have just created to reduce clutter in our environment.
 
 ```{r gender-3}
@@ -175,14 +178,17 @@ applications <- applications %>%
 rm(examiner_dates)
 gc()
 ```
+
 ## In order to keep these steps saved, I will save the file and reload the data back into R.
+
 ```{r}
 write.csv(applications, "applications_updated.csv")
 
 applications_updated = read.csv("applications_updated.csv")
 ```
 
-## Part 2: 
+## Part 2:
+
 Pick two workgroups you want to focus on (remember that a workgroup is represented by the first 3 digits of `examiner_art_unit` value)
 
 How do they compare on examiners’ demographics? Show summary statistics and plots.
@@ -198,6 +204,7 @@ selected_workgroups = applications_updated %>% filter(workgroup %in% c("176", "2
 
 head(selected_workgroups)
 ```
+
 ```{r}
 if("workgroup" %in% colnames(selected_workgroups)) {
   grouped_data <- selected_workgroups %>%
@@ -222,22 +229,24 @@ demographic <- selected_workgroups %>%
 
 print(demographic)
 ```
+
 ```{r}
 proportion_male = selected_workgroups %>% group_by(workgroup) %>% summarise(proportion_male = mean(gender == 'male', na.rm = TRUE)) %>% ungroup()
 ```
 
 ```{r}
+#install.packages("ggplot2")
+library(ggplot2)
 ggplot(proportion_male, aes(x=workgroup, y=proportion_male, fill=workgroup)) + geom_bar(stat = "identity", width=1) + scale_fill_manual(values=c("darkgreen","orange")) + labs(title = "Male Proportion For Selected Workgroup", x="workgroup",y="male proportion") + theme_minimal()
 ```
-From the chart, workgroup 213 has a higher proportion of male members compared to workgroup 176, as evidenced by the height of the orange bar (for workgroup 213) relative to the green bar (for workgroup 176). There is a notable difference as shown in the visual comparison above.
-```{r}
-library(ggplot2)
 
-ggplot(selected_workgroups, aes(x = tenure_days, fill = workgroup)) + geom_histogram(position = "dodge", binwidth = 500) + labs(title = "Tenure (in Days) Distribution Breakdown by workgroups", x="Tenure (in days)", y = "Frequency") + scale_fill_manual(values = c("176" = "darkgreen", "213" = "orange"))
+From the chart, workgroup 213 has a higher proportion of male members compared to workgroup 176, as evidenced by the height of the orange bar (for workgroup 213) relative to the green bar (for workgroup 176). There is a notable difference as shown in the visual comparison above.
+
+```{ggplot(selected_workgroups, aes(x = tenure_days, fill = workgroup)) + geom_histogram(position = "dodge", binwidth = 500) + labs(title = "Tenure (in Days) Distribution Breakdown by workgroups", x="Tenure (in days)", y = "Frequency") + scale_fill_manual(values = c("176" = "darkgreen", "213" = "orange"))}
 ```
 
-
 ## Part 3
+
 Create advice networks from `edges_sample` and calculate centrality scores for examiners in your selected workgroups
 
 ```{r}
@@ -256,6 +265,7 @@ applications_updated$close_centrality <- close_centrality[match(applications_upd
 ```
 
 Recall that we select workgroups "176", "213"
+
 ```{r}
 library(dplyr)
 library(igraph)
@@ -269,7 +279,7 @@ V(network)$degree_centrality = degree(network)
 
 # Create a Race data frame with unique examiner_id and race.x values
 Race = applications_updated %>% 
-  select(examiner_id, race.x) %>% 
+  select(examiner_id, race) %>% 
   distinct()
 
 # Convert examiner_id to character to ensure matching
@@ -278,7 +288,7 @@ Race$examiner_id = as.character(Race$examiner_id)
 # Assign race to each vertex in the network
 for (i in seq_along(V(network))) {
   vertex_name <- V(network)$name[i]
-  V(network)$race[i] <- Race$race.x[Race$examiner_id == vertex_name]
+  V(network)$race[i] <- Race$race[Race$examiner_id == vertex_name]
 }
 
 # Visualize the network
@@ -291,21 +301,3 @@ ggraph(network, layout = "tree") +
 
 
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
