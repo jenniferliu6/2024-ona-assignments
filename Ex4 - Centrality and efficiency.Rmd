@@ -1,0 +1,300 @@
+---
+title: "Ex4 - Centrality and efficiency"
+author: "Jennifer Liu"
+date: "2024-04-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Step0: Import Libraries and dataset
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(igraph)
+library(gender)
+library(arrow)
+library(dplyr)
+library(wru)
+library(ggplot2)
+library(ggraph)
+library(tidyverse)
+library(tidygraph)
+```
+
+```{r}
+applications = read_parquet("C:\\Users\\Admin\\Downloads\\672_project_data\\app_data_sample.parquet")
+
+#review first rows of app_data_sample parquet file
+head(applications)
+```
+
+```{r}
+edges = read.csv("C:\\Users\\Admin\\Downloads\\672_project_data\\edges_sample.csv")
+
+edges <- edges %>%
+  mutate(
+    from = as.character(ego_examiner_id), # Convert IDs to character
+    to = as.character(alter_examiner_id)
+  ) %>%
+  drop_na()
+
+#review first rows of edges_sample csv file
+head(edges)
+```
+
+## Introduce gender, race, tenure variables
+```{r}
+examiner_names = applications %>% distinct(examiner_name_first)
+
+examiner_names_gender <- examiner_names %>% 
+  do(results = gender(.$examiner_name_first, method = "ssa")) %>% 
+  unnest(cols = c(results), keep_empty = TRUE) %>%
+  select(
+    examiner_name_first = name,
+    gender,
+    proportion_female
+  ) %>% 
+  filter(!is.na(gender))
+
+examiner_names_gender <- examiner_names_gender %>% 
+  select(examiner_name_first, gender)
+
+applications <- applications %>% 
+  left_join(examiner_names_gender, by = "examiner_name_first")
+
+# cleaning up
+rm(examiner_names)
+rm(examiner_names_gender)
+gc()
+```
+
+```{r}
+examiner_surnames <- applications %>% 
+  select(surname = examiner_name_last) %>% 
+  distinct()
+
+examiner_race <- examiner_surnames %>%
+  filter(!is.na(surname)) %>%
+  predict_race(voter.file = ., surname.only = TRUE) %>% 
+  as_tibble()
+
+examiner_race <- examiner_race %>% 
+  mutate(max_race_p = pmax(pred.asi, pred.bla, pred.his, pred.oth, pred.whi)) %>% 
+  mutate(race = case_when(
+    max_race_p == pred.asi ~ "Asian",
+    max_race_p == pred.bla ~ "black",
+    max_race_p == pred.his ~ "Hispanic",
+    max_race_p == pred.oth ~ "other",
+    max_race_p == pred.whi ~ "white",
+    TRUE ~ NA_character_
+  ))
+
+examiner_race <- examiner_race %>% 
+  select(surname,race)
+
+applications <- applications %>% 
+  left_join(examiner_race, by = c("examiner_name_last" = "surname"))
+            
+#Cleaning up
+rm(examiner_race)
+rm(examiner_surnames)
+gc()
+```
+```{r}
+examiner_dates <- applications %>% 
+  select(examiner_id, filing_date, appl_status_date) 
+
+examiner_dates <- examiner_dates %>% 
+  mutate(start_date = ymd(filing_date), end_date = as_date(dmy_hms(appl_status_date)))
+
+examiner_tenure <- examiner_dates %>%
+  # Remove rows with NA in start_date or end_date before grouping and summarising
+  filter(!is.na(start_date) & !is.na(end_date)) %>%
+  group_by(examiner_id) %>%
+  summarise(
+    earliest_date = min(start_date, na.rm = TRUE), 
+    latest_date = max(end_date, na.rm = TRUE),
+    tenure_days = interval(earliest_date, latest_date) %/% days(1),
+    .groups = 'drop' # Automatically drop the grouping
+  ) %>% 
+  # Keep records with a latest_date before 2018
+  filter(year(latest_date) < 2018)
+
+applications <- applications %>% 
+  left_join(examiner_tenure, by = "examiner_id")
+
+rm(examiner_tenure)
+gc()
+```
+
+## Introduce Processing Time
+An essential part of our analysis involves determining the application processing time, which is the period between the filing date and the final decision. This measurement is critical for assessing the efficiency of the patent examination process.
+
+### First of all, in this analysis, I will exclude applications with "PEND" status.
+```{r}
+applications <- applications %>%
+  filter(disposal_type != "PEND")
+
+applications <- applications %>%
+  mutate(app_proc_time = interval(
+    ymd(filing_date),
+    dmy_hms(appl_status_date)
+  ) %/% days(1))
+gc()
+
+head(applications)
+```
+## Generate Network Graph
+Next, we ready the applications dataframe for inclusion in the network graph. This process involves moving the examiner_id to a more accessible location, changing IDs into character strings to match the edge data format, and updating the examiner_id to name for better clarity. We then construct a directed graph using the edges dataframe, integrating examiner information from the applications.
+```{r}
+# Preparing applications data for graph creation
+applications <- applications %>%
+  relocate(examiner_id, .before = application_number) %>%
+  mutate(examiner_id = as.character(examiner_id)) %>%
+  drop_na(examiner_id) %>%
+  rename(name = examiner_id)
+
+# Creating a directed graph from the edges data
+graph <- tbl_graph(
+  edges = (edges %>% relocate(from, to)),
+  directed = TRUE
+)
+
+# Enriching graph nodes with examiner data from applications
+graph <- graph %>%
+  activate(nodes) %>%
+  inner_join(
+    (applications %>% distinct(name, .keep_all = TRUE)),
+    by = "name"
+  )
+
+# Display the graph structure
+graph
+```
+After performing these operations, the enriched graph is displayed, showing that it consists of 2,489 nodes and 17,720 edges. This directed multigraph with 127 components indicates a complex network of interactions among USPTO patent examiners. This enriched graph will serve as a foundation for exploring questions related to the length of patent application prosecution, the role of network structure, and the impact of race and ethnicity on these processes. For instance, such patterns could indicate frequent collaborations or consultations on patent applications, underscoring a complex network of professional relationships within the USPTO. The identification of 127 separate components in the network points to a segmented structure, where certain groups of examiners might interact more closely, likely due to shared specializations or organizational divisions. This segmentation could reflect the varied technical areas that the patent applications encompass, suggesting that examiners are naturally grouped by their expertise or the structural organization of their departments.
+
+## Apply Linear Regression Models
+### Calculate centrality measures
+
+```{r}
+node_data <- graph %>%
+  activate(nodes) %>%
+  mutate(
+    degree = centrality_degree(),
+    betweenness = centrality_betweenness(),
+    closeness = centrality_closeness()
+  ) %>%
+  arrange(-degree) %>%
+  as_tibble() %>%
+  mutate(tc = as.factor(tc))
+
+node_data
+```
+```{r}
+linear_model = lm(app_proc_time ~ degree + betweenness + closeness + tenure_days, data = node_data)
+
+summary(linear_model)
+```
+### Result
+The extended linear regression analysis of `app_proc_time` with predictors `degree`, `betweenness`, `closeness`, and `tenure_days` using the `node_data` dataset reveals:
+- The **intercept** is 632.22, indicating that the base processing time is around 632 days when all other variables are zero, with a significant p-value of 1.87e-05.
+- The coefficient for `degree` is 1.26, but with a p-value of 0.498, suggesting no significant effect on processing time.
+- The `betweenness` centrality has a coefficient of -0.01013 with a p-value of 0.314, indicating a non-significant negative relationship with processing time.
+- The `closeness` centrality shows a coefficient of -102.06, but with a p-value of 0.294, also suggesting a non-significant effect on processing time.
+- The `tenure_days` variable has a significant positive effect on processing time, with a coefficient of 0.37572 and a very significant p-value (< 2e-16).
+- The residuals range from -2654 to 3219.3, with a median close to -68.5, pointing to variability in the model’s accuracy.
+- The model has a residual standard error of 1228 and explains about 12.27% of the variance in processing time, as indicated by an R-squared of 0.1227 and an adjusted R-squared of 0.1202.
+- The F-statistic is 49.79, with a highly significant p-value (< 2.2e-16), suggesting that the overall model, including all four predictors, significantly predicts processing time, although individual predictors vary in their significance and impact.
+
+### Add interaction terms
+```{r}
+linear_model2 = lm(app_proc_time ~ degree + betweenness + closeness + tenure_days + degree*gender, data = node_data)
+
+summary(linear_model2)
+```
+The regression analysis now incorporates an interaction term between `degree` and `gender`, alongside the other predictors. Key findings include:
+
+- **Base Processing Time (Intercept):** Estimated at 531 days when all other variables are zero, with a significant p-value of 0.00267, indicating a meaningful baseline effect.
+- **Degree Effect:** The `degree` coefficient is 5.29, suggesting an increase in processing time per degree unit. However, this is not statistically significant (p-value = 0.12685), hinting at a potential inconsistency in the degree's impact across genders.
+- **Betweenness Centrality:** Shows a negligible negative impact on processing time (coefficient = -0.01013) but lacks statistical significance (p-value = 0.32150).
+- **Closeness Centrality:** The coefficient of -32.12 indicates a reduction in processing time with higher closeness values, though it is not statistically significant (p-value = 0.76261).
+- **Tenure Days Influence:** Demonstrates a strong positive relationship with processing time, with a coefficient of 0.36867 and a highly significant p-value (< 2e-16).
+- **Gender (Male) Impact:** Being male is associated with an increase in processing time by 126.74 days, although not statistically significant (p-value = 0.17230).
+- **Interaction Term (Degree and Male Gender):** The interaction has a negative coefficient of -2.93361, implying the effect of `degree` on processing time is reduced for males, yet this interaction is not statistically significant (p-value = 0.47073).
+
+**Model Fit:**
+- The residual standard error is 1217 days.
+- The R-squared value is 0.1273, signifying that around 12.73% of the variance in processing time is accounted for by the model.
+- An F-statistic of 28.6 and a p-value less than 2.2e-16 confirm the statistical significance of the model overall.
+
+In conclusion, the addition of the interaction term slightly improves the explanatory power of the model, but many of the individual effects, including the interaction term itself, do not achieve statistical significance. This outcome suggests that the interaction between `degree` and `gender` does not significantly enhance the understanding of processing time dynamics.
+
+### Add interaction terms
+```{r}
+linear_model3 = lm(app_proc_time ~ degree + betweenness + closeness + tenure_days + gender*betweenness, data = node_data)
+
+summary(linear_model3)
+```
+In the updated regression analysis of `app_proc_time`, an interaction term between `gender` and `betweenness` has been added to the model, which also includes `degree`, `closeness`, and `tenure_days`. Here are the interpretations:
+
+- **Base Processing Time (Intercept):** The model estimates the baseline processing time at 548.17 days when all predictors are zero, significantly established with a p-value of 0.00159.
+- **Degree:** The coefficient for `degree` is 3.29, indicating a slight increase in processing time per unit increase in degree, although this is not statistically significant (p-value = 0.10109).
+- **Betweenness:** The coefficient of 0.02176 suggests a marginal increase in processing time with higher betweenness, but this effect is not statistically significant (p-value = 0.51106).
+- **Closeness:** The impact of `closeness` is minimal and negative (-29.67) but not significant (p-value = 0.78032), indicating no strong relationship with processing time.
+- **Tenure Days:** Shows a strong positive relationship with processing time, as each additional day in tenure increases processing time by 0.3681, highly significant (p-value < 2e-16).
+- **Gender (Male):** Being male is associated with an increase in processing time by 102.84 days, but this increase is not statistically significant (p-value = 0.19782).
+- **Interaction (Betweenness and Male Gender):** The interaction term has a coefficient of -0.03572, indicating a slight decrease in the effect of betweenness on processing time for males, though this interaction is not statistically significant (p-value = 0.30284).
+
+**Model Fit:**
+- The residual standard error is 1216 days.
+- The R-squared value of 0.1277 suggests that around 12.77% of the variance in processing time is explained by the model, with an adjusted R-squared of 0.1233.
+- The F-statistic is 28.7 with a highly significant p-value (< 2.2e-16), indicating that the model, as a whole, is statistically significant.
+
+In conclusion, while the model shows a statistically significant overall fit, the effects of individual predictors, including the interaction between `gender` and `betweenness`, are mostly not statistically significant. This suggests that the predictors, as currently specified, have limited individual impact on explaining the variance in processing time.
+
+### Add interaction terms
+```{r}
+linear_model4 = lm(app_proc_time ~ degree + betweenness + closeness + tenure_days + gender*closeness, data = node_data)
+
+summary(linear_model4)
+```
+An interaction term between `gender` and `closeness` is introduced to the regression analysis of `app_proc_time`, alongside other predictors like `degree`, `betweenness`, and `tenure_days`. The findings are as follows:
+
+- **Base Processing Time (Intercept):** The model estimates the baseline processing time at 590.49 days when other predictors are zero, with a significant p-value of 0.00113.
+- **Degree:** The coefficient for `degree` is 3.22, implying a modest increase in processing time per degree unit, but this is not statistically significant (p-value = 0.10898).
+- **Betweenness:** The coefficient of -0.01046 for `betweenness` suggests a negligible decrease in processing time, which is not statistically significant (p-value = 0.30450).
+- **Closeness:** The coefficient for `closeness` is -137.20, indicating a potential decrease in processing time, but this effect is not significant (p-value = 0.47171).
+- **Tenure Days:** A positive significant relationship with processing time is indicated by a coefficient of 0.36845 (p-value < 2e-16), showing increased processing time with longer tenure days.
+- **Gender (Male):** Being male is associated with an increase in processing time by 46.94 days, though not significant (p-value = 0.65287).
+- **Interaction (Closeness and Male Gender):** The interaction term has a coefficient of 144.57, suggesting that the relationship between `closeness` and processing time might vary by gender. However, this interaction is not statistically significant (p-value = 0.51059).
+
+**Model Fit:**
+- The residual standard error of the model is 1217 days.
+- The R-squared value is 0.1273, and the adjusted R-squared is 0.1228, indicating that about 12.73% of the variance in processing time is explained by the model.
+- The F-statistic is 28.58, with the model being highly significant overall (p-value < 2.2e-16).
+
+The introduction of the interaction between `gender` and `closeness` has not led to significant changes in the model's explanatory power. While the overall model remains statistically significant, the individual predictors, including the interaction term, show limited significance in explaining the variance in processing time.
+
+## Conclusion
+Based on the regression analyses, the interaction terms between `gender` and variables such as `closeness` and `betweenness` were not statistically significant. This indicates that the relationship between variables like `degree`, `betweenness`, `closeness`, and `tenure_days` and the application processing time does not substantially differ by examiner gender at the USPTO. Here are the implications:
+
+1. **Gender Neutrality:** The absence of significant gender-related interaction effects suggests that the USPTO's application processing times are generally gender-neutral, reflecting fairness and equality in the examination process.
+
+2. **Importance of Other Factors:** With examiner gender not significantly affecting processing times, the focus should shift to other influencing factors. The significant impact of `tenure_days` on processing time, for example, indicates that experience or service length might be crucial areas to consider for process optimization.
+
+3. **Training and Development:** The positive relationship between `tenure_days` and processing time implies that more experienced examiners may take longer to process applications, possibly due to handling complex cases or being thorough. This observation underscores the potential need for targeted training programs to enhance efficiency without compromising examination quality.
+
+4. **Continuous Improvement:** The low R-squared values hint at other unexplored factors influencing processing times. The USPTO could benefit from ongoing efforts to identify these factors, using data analytics and refining predictive models to better understand and improve processing times.
+
+5. **Policy and Strategic Planning:** These findings can guide policy and strategic decisions, especially concerning resource allocation, workload management, and operational efficiency. The non-significant impact of gender on processing times should reinforce the USPTO's commitment to gender equality and operational excellence.
+
+In conclusion, the analysis indicates that examiner gender does not significantly impact the processing times of patent applications at the USPTO. This insight supports the continuation of gender equality initiatives and suggests a strategic focus on other factors that may enhance the efficiency and effectiveness of the examination process.
+
+
+
+
